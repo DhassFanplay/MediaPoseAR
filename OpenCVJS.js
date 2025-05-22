@@ -1,5 +1,4 @@
-﻿
-let pose;
+﻿let pose;
 let canvas, ctx;
 let initialized = false;
 
@@ -17,11 +16,11 @@ function initializeCanvas(width, height) {
 // Setup BlazePose once
 function setupPose() {
     pose = new Pose({
-        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
+        locateFile: (file) => `./${file}`  // load local files
     });
 
     pose.setOptions({
-        modelComplexity: 2,
+        modelComplexity: 2,  // heavy model → will load pose_landmark_heavy.tflite
         smoothLandmarks: true,
         enableSegmentation: false,
         minDetectionConfidence: 0.5,
