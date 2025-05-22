@@ -1,82 +1,84 @@
-﻿let pose;
-let canvas, ctx;
-let initialized = false;
+import {
+    FilesetResolver,
+    PoseLandmarker
+} from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/vision_bundle.mjs";
 
-// Create canvas dynamically
-function initializeCanvas(width, height) {
-    if (!canvas) {
-        canvas = document.createElement('canvas');
-        canvas.width = width;
-        canvas.height = height;
-        ctx = canvas.getContext('2d');
-        document.body.appendChild(canvas); // Optional: comment out if not visible
+const canvas = document.createElement("canvas");
+const ctx = canvas.getContext("2d");
+const image = new Image();
+image.crossOrigin = "anonymous";
+
+// DEBUG helper
+const debug = (msg) => {
+    if (!window.debugDiv) {
+        window.debugDiv = document.createElement("div");
+        window.debugDiv.style.position = "absolute";
+        window.debugDiv.style.bottom = "10px";
+        window.debugDiv.style.left = "10px";
+        window.debugDiv.style.background = "rgba(0,0,0,0.7)";
+        window.debugDiv.style.color = "lime";
+        window.debugDiv.style.padding = "6px";
+        window.debugDiv.style.fontFamily = "monospace";
+        window.debugDiv.style.zIndex = 10000;
+        document.body.appendChild(window.debugDiv);
     }
-}
-
-// Setup BlazePose once
-function setupPose() {
-    pose = new Pose({
-        locateFile: (file) => `./${file}`  // load local files
-    });
-
-    pose.setOptions({
-        modelComplexity: 2,  // heavy model → will load pose_landmark_heavy.tflite
-        smoothLandmarks: true,
-        enableSegmentation: false,
-        minDetectionConfidence: 0.5,
-        minTrackingConfidence: 0.5
-    });
-
-    pose.onResults(onPoseResults);
-}
-
-// Unity calls this every frame with image data
-// imageData should be ImageBitmap, HTMLVideoElement, or HTMLCanvasElement
-window.ReceiveWebcamFrame = async function (imageBitmap) {
-    if (!initialized) {
-        setupPose();
-        initializeCanvas(imageBitmap.width, imageBitmap.height);
-        initialized = true;
-    }
-
-    // Draw incoming Unity frame into canvas
-    ctx.drawImage(imageBitmap, 0, 0, canvas.width, canvas.height);
-
-    // Send to BlazePose
-    await pose.send({ image: canvas });
+    window.debugDiv.innerText = msg;
 };
 
-function onPoseResults(results) {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
+// Load MediaPipe + model
+debug("Loading model...");
+const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/wasm");
 
-    if (results.poseLandmarks) {
-        drawLandmarks(results.poseLandmarks);
-    }
-}
+const landmarker = await PoseLandmarker.createFromOptions(vision, {
+    baseOptions: {
+        modelAssetPath: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task"
+    },
+    runningMode: "VIDEO",
+    numPoses: 1
+});
 
-// Draw keypoints on canvas
-function drawLandmarks(landmarks) {
-    ctx.fillStyle = 'lime';
-    ctx.strokeStyle = 'white';
-    ctx.lineWidth = 2;
 
-    for (let i = 0; i < landmarks.length; i++) {
-        const lm = landmarks[i];
-        const x = lm.x * canvas.width;
-        const y = lm.y * canvas.height;
-        ctx.beginPath();
-        ctx.arc(x, y, 3, 0, 2 * Math.PI);
-        ctx.fill();
-        ctx.fillText(i.toString(), x + 4, y - 4); // Debug index
+debug("Model loaded.");
 
-        // Highlight foot landmarks
-        if ([27, 28, 31, 32].includes(i)) {
-            ctx.beginPath();
-            ctx.arc(x, y, 6, 0, 2 * Math.PI);
-            ctx.fillStyle = 'red';
-            ctx.fill();
-            ctx.fillStyle = 'lime';
+// Called from Unity with base64 image
+window.ReceiveWebcamFrame = async (base64) => {
+    console.log("Frame received");
+
+    const image = new Image();
+    image.crossOrigin = "anonymous";
+    image.src = "data:image/jpeg;base64," + base64;
+
+    image.onload = async () => {
+        console.log("Image loaded", image.width, image.height); //  Add this
+
+        if (image.width === 0 || image.height === 0) {
+            console.warn("Image has zero size, skipping");
+            return;
         }
-    }
-}
+        canvas.width = image.width;
+        canvas.height = image.height;
+        ctx.drawImage(image, 0, 0);
+
+        const result = await landmarker.detectForVideo(canvas, performance.now());
+        console.log("Detection result:", result);
+
+        if (result.landmarks?.length > 0) {
+            const leftFoot = result.landmarks[0][30]; // index 31 is left foot
+            console.log("Left foot coords:", leftFoot);
+            if (window.unityInstance) {
+                const footData = {
+                    x: leftFoot.x,
+                    y: leftFoot.y
+                };
+                window.unityInstance.SendMessage("FootCube", "OnReceiveFootPosition", JSON.stringify(footData));
+
+            }
+        } else {
+            console.warn("No pose detected.");
+        }
+    };
+
+    image.onerror = (err) => {
+        console.error("Error loading image", err);
+    };
+};
